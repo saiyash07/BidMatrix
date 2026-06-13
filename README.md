@@ -5,7 +5,7 @@
 
 ---
 
-## 📌 Problem Statement
+## Problem Statement
 
 BidMatrix is an online advertising exchange that auctions display banner spaces in real time, manages advertiser budgets, and targets ads to specific customer demographics. The legacy system faced critical bottlenecks:
 
@@ -22,7 +22,7 @@ BidMatrix is an online advertising exchange that auctions display banner spaces 
 
 ---
 
-## 🚀 Features & Data Structures
+## Features & Data Structures
 
 | # | Feature | Data Structure | Complexity | Real-World Mapping |
 |---|---|---|---|---|
@@ -37,7 +37,7 @@ BidMatrix is an online advertising exchange that auctions display banner spaces 
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -63,7 +63,7 @@ BidMatrix is an online advertising exchange that auctions display banner spaces 
 
 ---
 
-## 📋 System Menu
+## System Menu
 
 When run, the program presents an interactive console menu:
 
@@ -87,7 +87,7 @@ When run, the program presents an interactive console menu:
 
 ---
 
-## 🛠️ How to Build & Run
+## How to Build & Run
 
 ### Prerequisites
 - C++17 compatible compiler (`g++`, `clang++`, or MSVC)
@@ -104,7 +104,7 @@ g++ -std=c++17 -O2 -o bidmatrix main.cpp
 
 ---
 
-## 📖 DSA Design Justifications
+## DSA Design Justifications
 
 ### 1. Hash Table — Inventory Listing
 The custom hash map (djb2 hash, chaining collision resolution) delivers **O(1) average** banner-space lookups. In production DSPs, millions of bid requests per second query inventory availability — linear scans would be catastrophically slow.
@@ -119,7 +119,7 @@ Ad exchanges receive thousands of bid events per second via WebSocket/TCP stream
 A Trie stores demographic segment keys (e.g. `dem_age_18_24`, `geo_us_ny`) with **O(L)** verification time where L is key length — constant regardless of database size. This mirrors The Trade Desk's audience segment token matching at the bid-decision layer.
 
 ### 5. Max-Heap — Campaign Yield Sorter
-The custom max-heap stores campaigns ranked by **eCPM = CTR × Bid × 1000**. It provides **O(1)** access to the highest-value campaign and **O(log N)** insertion — critical for real-time ad selection under strict latency budgets.
+The custom max-heap stores campaigns ranked by **eCPM = CTR x Bid x 1000**. It provides **O(1)** access to the highest-value campaign and **O(log N)** insertion — critical for real-time ad selection under strict latency budgets.
 
 ### 6. Graph + Dijkstra — Marketplace Network & Route Path
 Publisher SSPs and edge nodes are modelled as a weighted directed graph. **Dijkstra's algorithm** finds the minimum-latency path in **O(E log V)**, ensuring creative payloads meet the industry-standard `<100 ms` delivery SLA.
@@ -129,18 +129,18 @@ A linked-list free-list with **First-Fit allocation** and **adjacent-block coale
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 BidMatrix/
-├── main.cpp          # Full C++ implementation (1083 lines)
+├── main.cpp          # Full C++ implementation
 ├── README.md         # This file
 └── LICENSE           # MIT License
 ```
 
 ---
 
-## 🌐 Real-World Platform Analogies
+## Real-World Platform Analogies
 
 | Component | Google DV360 | The Trade Desk |
 |---|---|---|
@@ -154,13 +154,13 @@ BidMatrix/
 
 ---
 
-## 📜 License
+## License
 
 This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
 
 ---
 
-## 👤 Author
+## Author
 
 **Saiyash Poojari**
 ITM Skills University — DSA Case Study #88
