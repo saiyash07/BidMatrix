@@ -11,27 +11,30 @@
 #include <cstdint>
 
 // ============================================================================
-// SYSTEM DOCUMENTATION & ARCHITECTURAL REAL-WORLD MAPPINGS (DV360 / Trade Desk)
+// BidMatrix - Dynamic Real-Time Ad Bidding Simulator
+// ITM Skills University | DSA Case Study
 // ============================================================================
 /*
   =============================================================================
                      DYNAMIC REAL-TIME AD BIDDING MATRIX
   =============================================================================
-  This system models the inner working of a modern Demand-Side Platform (DSP) 
-  and Ad Exchange (SSP / Ad Server) like Google DV360 or The Trade Desk.
+  Built this to simulate how ad platforms like DV360 and The Trade Desk
+  actually work under the hood. Each feature maps to a real part of the
+  ad tech pipeline — from inventory lookups to routing ad creatives.
 
-  -----------------------------------------------------------------------------
-  FEATURE                      | DATA STRUCTURE          | COMPLEXITY | REAL-WORLD MAPPING
-  -----------------------------------------------------------------------------
-  1. Inventory Listing         | Custom Chained Hash Map | O(1) avg   | Active display inventory database
-  2. Update History (Rollback) | Custom Stack            | O(1)       | Budget allocation ledger & safety rollback
-  3. Auction Loop (FIFO)       | Custom Linked Queue     | O(1)       | Real-time bidding (RTB) event stream (TCP)
-  4. Attribute Token           | Custom Trie             | O(L)       | Fast demographic profile verification
-  5. Campaign Sorter           | Custom Max-Heap         | O(log N)   | Campaign yield ranker (eCPM bidding logic)
-  6. Marketplace Network       | Graph (Adjacency List)  | O(V + E)   | Exchange/SSP partner map
-  7. Route Path (Latency)      | Dijkstra's Algorithm    | O(E log V) | Smart routing/Ad delivery optimization
-  8. Block Allocator           | Free List (First-Fit)   | O(N)       | Edge Server (CDN) creative asset storage
-  -----------------------------------------------------------------------------
+  Quick overview of what's implemented and why:
+  -----------------------------------------------------------------------
+  Feature                    | Structure Used        | Time      | Why
+  -----------------------------------------------------------------------
+  1. Inventory Listing       | Custom Hash Map       | O(1) avg  | Fast banner slot lookups
+  2. Budget Rollback         | Custom Stack          | O(1)      | Undo bad budget changes instantly
+  3. Auction Loop            | Custom Linked Queue   | O(1)      | Bids processed in order received
+  4. Demographic Targeting   | Custom Trie           | O(L)      | Prefix-based segment matching
+  5. Campaign Ranking        | Custom Max-Heap       | O(log N)  | Always know which campaign pays most
+  6. Exchange Network        | Graph (Adj. List)     | O(V + E)  | Map SSP/publisher connections
+  7. Latency Routing         | Dijkstra's Algorithm  | O(E logV) | Find fastest delivery path
+  8. Edge Cache Allocator    | Free List (First-Fit) | O(N)      | Manage CDN memory for ad assets
+  -----------------------------------------------------------------------
 */
 
 using namespace std;
@@ -39,8 +42,9 @@ using namespace std;
 // ============================================================================
 // 1. INVENTORY LISTING (Custom Hash Map)
 // ============================================================================
-// Real-world mapping: DSP/SSP Inventory cache. O(1) lookup to check if a banner
-// space is active, dimensions, pricing, and publisher source.
+// Used a hash map here because banner slot lookups need to be instant.
+// When a bid request comes in we need to know the floor price and publisher
+// without scanning through every entry.
 struct BannerSpace {
     string id;          // e.g. "banner_header_top"
     string publisher;   // e.g. "NYTimes.com"
@@ -61,7 +65,7 @@ private:
     int getHash(const string& key) const {
         unsigned long hash = 5381;
         for (char c : key) {
-            hash = ((hash << 5) + hash) + c; // djb2 hash algorithm
+            hash = ((hash << 5) + hash) + c; // classic djb2
         }
         return hash % BUCKET_COUNT;
     }
@@ -89,7 +93,7 @@ public:
         BannerSpace* curr = buckets[idx];
         while (curr != nullptr) {
             if (curr->id == id) {
-                // Update existing
+                // already in there, just update it
                 curr->publisher = pub;
                 curr->size = size;
                 curr->minBidFloor = floor;
@@ -97,7 +101,7 @@ public:
             }
             curr = curr->next;
         }
-        // Insert at head of list (chaining)
+        // prepend to the chain at this bucket
         BannerSpace* entry = new BannerSpace(id, pub, size, floor);
         entry->next = buckets[idx];
         buckets[idx] = entry;
@@ -137,9 +141,9 @@ public:
 // ============================================================================
 // 2. UPDATE HISTORY / BUDGET ROLLBACK (Custom Stack)
 // ============================================================================
-// Real-world mapping: Prevents overspending. In DSPs like DV360, campaign 
-// budgets are adjusted dynamically. If an algorithmic adjustment leads to 
-// potential overspending, the system rolls back to the previous stable allocation.
+// Basically an undo button for budget changes. If someone accidentally
+// bumps a campaign's budget up too high, we can snap it back to whatever
+// it was before. Stack made sense here — most recent change goes first.
 struct BudgetState {
     string campaignId;
     double oldAllocatedBudget;
@@ -152,7 +156,7 @@ struct BudgetState {
 
 class BudgetHistoryStack {
 private:
-    vector<BudgetState> stack; // Custom Stack implementation using dynamic array
+    vector<BudgetState> stack; // backing the stack with a vector, simpler than a linked list
 
 public:
     void push(const string& campId, double oldB, double newB, const string& timestamp) {
@@ -200,9 +204,10 @@ public:
 // ============================================================================
 // 3. AUCTION LOOP (Custom FIFO Bid Queue)
 // ============================================================================
-// Real-world mapping: Event handling/Message queuing of incoming HTTP bidding requests.
-// Ad exchanges handle thousands of bids/sec. FIFO queue ensures fairness and 
-// correct transaction sequence.
+// Bids arrive over the network and need to be handled in the order they came
+// in — first bid, first served. A FIFO queue is the obvious choice here.
+// In a real exchange this would be backed by something like Kafka, but
+// a linked queue works fine for the simulation.
 struct AdBid {
     string bidId;
     string bannerSpaceId;
@@ -291,8 +296,9 @@ public:
 // ============================================================================
 // 4. ATTRIBUTE TOKEN DEMOGRAPHIC VERIFICATION (Custom Trie)
 // ============================================================================
-// Real-world mapping: User profile segmentation checker. Quickly determines
-// target segment matching (e.g. checks if browser segments match advertiser's targets).
+// Demographic keys share a lot of prefixes (dem_age_18_24, dem_age_25_34, etc.)
+// so a Trie is a natural fit. Lookup is O(key length) regardless of how many
+// segments are registered, which is what we want.
 class TrieNode {
 public:
     unordered_map<char, TrieNode*> children;
@@ -320,7 +326,7 @@ public:
         delete root;
     }
 
-    // Insert demographic attribute path (e.g. "dem_age_18_24", "geo_us_east")
+    // e.g. "dem_age_18_24", "geo_us_east"
     void insert(const string& attributeKey, const string& description) {
         TrieNode* curr = root;
         for (char c : attributeKey) {
@@ -333,7 +339,7 @@ public:
         curr->segmentDescription = description;
     }
 
-    // Verify demographic attribute token exists in targeting pool
+    // check if this targeting key is one we recognize
     bool verify(const string& attributeKey, string& outDesc) {
         TrieNode* curr = root;
         for (char c : attributeKey) {
@@ -380,8 +386,9 @@ public:
 // ============================================================================
 // 5. CAMPAIGN YIELD SORTER (Custom Max-Heap)
 // ============================================================================
-// Real-world mapping: Ranking active campaigns by expected revenue (eCPM = Bid * CTR * 1000).
-// Max-heap allows real-time selection of top-performing ad campaigns.
+// Campaigns are ranked by eCPM (Bid * CTR * 1000). We always want the
+// highest-value campaign at the top, so a max-heap is perfect.
+// Insertion is O(log N) and peeking the best one is O(1).
 struct Campaign {
     string id;
     string name;
@@ -474,7 +481,7 @@ public:
         }
         cout << left << setw(10) << "ID" << setw(18) << "Campaign Name" << setw(12) << "Ctr (%)" << setw(12) << "Bid Value" << "Expected eCPM (Yield)\n";
         cout << "-------------------------------------------------------------\n";
-        // To display sorted without breaking heap, duplicate heap
+        // copy the heap so we can drain it for display without destroying the original
         CampaignYieldSorter tempSorter = *this;
         Campaign item("", "", 0, 0, 0);
         while (tempSorter.extractMax(item)) {
@@ -491,9 +498,9 @@ public:
 // ============================================================================
 // 6 & 7. MARKETPLACE NETWORK & LATENCY ROUTE PATH (Graph & Dijkstra)
 // ============================================================================
-// Real-world mapping: Publisher exchange connections. Ad delivery optimization
-// requires serving ad markup from nearest SSP/CDN network to browser within
-// strict <100ms budget. Dijkstra finds the fastest path.
+// The SSP/publisher connections form a weighted graph where the weights
+// are latency in ms. We need to deliver the ad in under 100ms, so
+// Dijkstra gives us the lowest-latency path between any two nodes.
 struct Edge {
     string destination;
     double latencyMs; // Weight in milliseconds
@@ -522,7 +529,7 @@ public:
         nodes[from].edges.push_back({to, latency});
     }
 
-    // Dijkstra's algorithm implementation to find path with shortest cumulative latency
+    // standard Dijkstra — min-heap on (distance, node)
     bool findShortestLatencyRoute(const string& startId, const string& endId, vector<string>& outPath, double& outLatency) {
         if (nodes.find(startId) == nodes.end() || nodes.find(endId) == nodes.end()) {
             return false;
@@ -534,7 +541,7 @@ public:
             distances[key] = numeric_limits<double>::infinity();
         }
 
-        // Min-heap structure for Dijkstra: pair<distance, node_id>
+        // priority_queue defaults to max, greater<> flips it to min
         priority_queue<pair<double, string>, vector<pair<double, string>>, greater<pair<double, string>>> pq;
 
         distances[startId] = 0.0;
@@ -563,7 +570,7 @@ public:
             return false;
         }
 
-        // Reconstruct path
+        // walk predecessors backwards to rebuild the path
         outLatency = distances[endId];
         string curr = endId;
         while (curr != startId) {
@@ -599,8 +606,9 @@ public:
 // ============================================================================
 // 8. BLOCK ALLOCATOR (Edge Storage Memory Management)
 // ============================================================================
-// Real-world mapping: CDN Caching. Fast memory allocation on servers for 
-// caching dynamic HTML creative media payloads.
+// Simulates how an edge/CDN server manages its cache space for ad creatives.
+// First-fit allocation keeps it simple. When a creative is evicted,
+// we merge adjacent free blocks to avoid fragmentation building up.
 struct MemoryBlock {
     int startAddress;
     int size;
@@ -631,12 +639,12 @@ public:
         }
     }
 
-    // Allocate utilizing First-Fit heuristic
+    // first-fit: grab the first block that's big enough
     int allocate(int requestSize, const string& creativeId) {
         MemoryBlock* curr = head;
         while (curr != nullptr) {
             if (curr->isFree && curr->size >= requestSize) {
-                // Perfect fit or split block
+                // split if there's leftover space
                 if (curr->size > requestSize) {
                     MemoryBlock* split = new MemoryBlock(curr->startAddress + requestSize, curr->size - requestSize);
                     split->next = curr->next;
@@ -649,10 +657,10 @@ public:
             }
             curr = curr->next;
         }
-        return -1; // Out of bounds / memory fragmented
+        return -1; // no block fits — fragmented or just out of space
     }
 
-    // Deallocate and coalesce adjacent free blocks
+    // free the block, then merge any neighboring free blocks
     bool deallocate(const string& creativeId) {
         MemoryBlock* curr = head;
         bool found = false;
@@ -667,7 +675,7 @@ public:
 
         if (!found) return false;
 
-        // Coalesce continuous free blocks
+        // merge adjacent free blocks so we don't end up with lots of tiny gaps
         curr = head;
         while (curr != nullptr && curr->next != nullptr) {
             if (curr->isFree && curr->next->isFree) {
@@ -702,7 +710,7 @@ public:
 };
 
 // ============================================================================
-// CONSOLE SYSTEM INTERACTIVE INTERFACE
+// Main menu / interactive console
 // ============================================================================
 void displayHeader() {
     cout << "=============================================================================\n";
@@ -712,35 +720,35 @@ void displayHeader() {
 }
 
 int main() {
-    // Seed initial mock databases
+    // pre-load some sample data so the demo isn't empty
     InventoryListing inventory;
     BudgetHistoryStack budgetLedger;
     AuctionLoopQueue bidQueue;
     AttributeTokenTrie demographicsTrie;
     CampaignYieldSorter campaignSorter;
     MarketplaceNetwork network;
-    EdgeServerBlockAllocator edgeAllocator(1024); // 1024 KB Server memory space
+    EdgeServerBlockAllocator edgeAllocator(1024); // 1024 KB total
 
-    // 1. Seed Banner Spaces
+    // banner inventory
     inventory.insert("space_header", "CNN.com", "728x90", 2.50);
     inventory.insert("space_sidebar", "Bloomberg", "300x250", 1.80);
     inventory.insert("space_footer", "Medium.com", "468x60", 0.90);
     inventory.insert("space_video", "YouTube.com", "640x360", 5.00);
 
-    // 2. Seed Demographic Segment Trie
+    // demographic targeting segments
     demographicsTrie.insert("dem_age_18_24", "Young Adults (18-24)");
     demographicsTrie.insert("dem_age_25_34", "Young Professionals (25-34)");
     demographicsTrie.insert("geo_us_ny", "New York, USA Residents");
     demographicsTrie.insert("int_sports", "Sports Fans");
     demographicsTrie.insert("int_tech", "Technology Enthusiasts");
 
-    // 3. Seed Campaigns
-    campaignSorter.insertCampaign("camp_nike", "Nike Run Club", 10000.0, 0.05, 3.20); // 0.05 * 3.2 * 1000 = $160 eCPM
-    campaignSorter.insertCampaign("camp_apple", "iPhone 18 Launch", 50000.0, 0.08, 4.50); // 0.08 * 4.5 * 1000 = $360 eCPM
-    campaignSorter.insertCampaign("camp_star", "Starbucks Brew", 8000.0, 0.03, 1.50);    // 0.03 * 1.5 * 1000 = $45 eCPM
-    campaignSorter.insertCampaign("camp_tesla", "Tesla CyberCab", 25000.0, 0.06, 5.50);  // 0.06 * 5.5 * 1000 = $330 eCPM
+    // campaigns — eCPM = CTR * bid * 1000
+    campaignSorter.insertCampaign("camp_nike", "Nike Run Club", 10000.0, 0.05, 3.20); // $160 eCPM
+    campaignSorter.insertCampaign("camp_apple", "iPhone 18 Launch", 50000.0, 0.08, 4.50); // $360 eCPM
+    campaignSorter.insertCampaign("camp_star", "Starbucks Brew", 8000.0, 0.03, 1.50);    // $45 eCPM
+    campaignSorter.insertCampaign("camp_tesla", "Tesla CyberCab", 25000.0, 0.06, 5.50);  // $330 eCPM
 
-    // 4. Seed Routing Graph Topology
+    // routing network between RTB platform and publisher SSPs
     network.addConnection("Platform_RTB", "US_East_Edge", 5.2);
     network.addConnection("Platform_RTB", "US_West_Edge", 18.4);
     network.addConnection("US_East_Edge", "NYTimes_SSP", 2.1);
@@ -978,7 +986,7 @@ int main() {
                 cout << "=============================================================\n";
                 cout << "Initiating dynamic ad request pipeline...\n\n";
 
-                // Step A: Target user enters NYTimes with profile containing tech enthusiast and US East location
+                // user lands on NYTimes — check their demographic profile
                 cout << "[Step A] Client user accesses publisher NYTimes.com.\n";
                 cout << "         Checking demographic profiles on the edge Trie...\n";
                 string profileKey1 = "geo_us_ny";
@@ -988,7 +996,7 @@ int main() {
                     cout << "         -> Dynamic Demographics Match: " << d1 << " & " << d2 << "\n";
                 }
 
-                // Step B: Pull top yielding campaign matching expectations
+                // find the best-paying campaign for this user
                 cout << "\n[Step B] Querying Campaign Sorter Max-Heap for highest yielding ad...\n";
                 Campaign top("", "", 0, 0, 0);
                 if (campaignSorter.peekMax(top)) {
@@ -996,13 +1004,13 @@ int main() {
                          << " (Estimated eCPM: $" << top.expectedECpm << ")\n";
                 }
 
-                // Step C: Simulate auction incoming bids enqueueing in Loop Queue
+                // competing bids come in — queue them up FIFO
                 cout << "\n[Step C] Queuing live RTB bidding traffic in strict chronological order...\n";
                 bidQueue.enqueue("bid_01", "space_header", "adv_apple", top.bidValue + 0.50, "Chrome_macOS");
                 bidQueue.enqueue("bid_02", "space_header", "adv_nike", top.bidValue - 0.20, "Safari_iOS");
                 bidQueue.display();
 
-                // Step D: Process auction winners FIFO
+                // process bids in order, first one wins
                 cout << "\n[Step D] Dequeuing and resolving bids...\n";
                 AdBid* winBid = nullptr;
                 if (bidQueue.dequeue(winBid)) {
@@ -1010,14 +1018,14 @@ int main() {
                          << winBid->advertiserId << "] wins slot [" << winBid->bannerSpaceId 
                          << "] for $" << fixed << setprecision(2) << winBid->bidAmount << "\n";
                     
-                    // Mark inventory allocated
+                    // mark the slot as taken
                     BannerSpace* sp = inventory.search(winBid->bannerSpaceId);
                     if (sp) {
                         sp->isAllocated = true;
                         cout << "         -> Banner space [" << sp->id << "] allocated successfully.\n";
                     }
 
-                    // Step E: Route creative content over network paths using Dijkstra
+                    // figure out the fastest path to deliver the creative
                     cout << "\n[Step E] Resolving shortest latency path for ad creative transmission...\n";
                     vector<string> route;
                     double latency = 0;
@@ -1029,10 +1037,10 @@ int main() {
                         cout << " | Latency: " << latency << " ms\n";
                     }
 
-                    // Step F: Cache ad file on local Edge Server block allocation
+                    // cache the winning creative on the edge server
                     cout << "\n[Step F] Allocating storage partition for active ad content cache...\n";
                     string assetId = winBid->advertiserId + "_hero_ad";
-                    int addr = edgeAllocator.allocate(150, assetId); // 150 KB graphic asset
+                    int addr = edgeAllocator.allocate(150, assetId); // ~150 KB for a banner/video asset
                     if (addr != -1) {
                         cout << "         -> Space allocated at server memory address: " << addr << "\n";
                     }
